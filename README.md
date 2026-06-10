@@ -133,7 +133,7 @@ User prompt
           │
           ▼
 ┌─────────────────────┐
-│ 2. Compression      │  Read files, extract function/class signatures
+│ 2. Compression      │  Read files, extract signatures + content-aware compress
 └─────────┬───────────┘
           │
           ▼
@@ -208,7 +208,87 @@ class DataProcessor
 
 **Savings:** 60-90% reduction in lines sent to the model.
 
-### 2. Cache Alignment
+### 2. Content-Aware Routing
+
+**What it does:** Detects the type of content (diff, log, search results, JSON, code) and routes it to a specialized compressor. Instead of treating everything as code, each content type gets optimized differently.
+
+**Supported content types:**
+
+| Type | Detection | Compressor | Savings |
+|------|-----------|------------|---------|
+| `diff` | `diff --git`, `@@` hunks | Diff Compressor | 5-10x |
+| `log` | `ERROR`, `FAIL`, `Traceback`, build output | Log Compressor | 10-50x |
+| `search` | `file:line:content` grep format | Search Compressor | 5-10x |
+| `json` | JSON arrays/objects | Smart Crusher (first+last items) | 3-10x |
+| `code` | `def`, `class`, `function` | Signature Extraction | 60-90x |
+| `text` | default | Passthrough | 1x |
+
+### 3. Diff Compressor
+
+**What it does:** Compresses git diff / unified diff output by parsing the format and keeping only the most important parts.
+
+**How:**
+- Parses `diff --git`, `--- a/`, `+++ b/`, `@@` hunk headers
+- Caps files (default: 10), sorted by change count (most changed first)
+- Caps hunks per file (default: 3): keeps first, last, and highest-change middle hunk
+- Trims context lines around changes (default: 2 lines each side)
+
+**Example:**
+```diff
+# Original: 500-line diff across 20 files
+# Compressed: 45 lines across 10 most-changed files, 3 hunks each
+
+diff --git a/src/auth.py b/src/auth.py
+@@ -42,2 +42,5 @@ def login(user, pass):
++    validate_token(token)
++    check_permissions(user)
+```
+
+### 4. Log Compressor
+
+**What it does:** Compresses build and test output (pytest, npm, cargo, jest, make) by keeping only errors, failures, warnings, and stack traces.
+
+**How:**
+- Classifies each line: ERROR(10), FAIL(10), WARN(5), STACK_TRACE(8), SUMMARY(7), INFO(1), DEBUG(0.5)
+- Keeps lines with score >= 3 (errors, failures, warnings, stack traces, summaries)
+- Preserves full stack traces (doesn't drop mid-trace lines)
+- Adds `[... N lines compressed ...]` markers
+
+**Example:**
+```
+# Original: 10,000-line test output
+# Compressed: 50 lines (errors + stack traces + summary)
+
+FAILED tests/test_auth.py::test_login - AssertionError: ...
+  File "tests/test_auth.py", line 42, in test_login
+    assert result == expected
+[... 9,945 lines compressed ...]
+=== 1 failed, 847 passed in 12.3s ===
+```
+
+### 5. Search Compressor
+
+**What it does:** Compresses grep/ripgrep search output by scoring matches and keeping the most relevant ones.
+
+**How:**
+- Parses `file:line:content` format
+- Scores matches higher for error/warn/fail/exception/bug/security keywords
+- Caps files (default: 15), caps matches per file (default: 5)
+- Always keeps first + last match per file, fills with highest-scored
+- Adds `[... N more matches in file]` summaries
+
+**Example:**
+```
+# Original: 200 grep matches across 30 files
+# Compressed: 40 matches across 15 files
+
+src/auth.py:42:    raise AuthenticationError("invalid token")
+src/auth.py:87:    except TokenExpiredError:
+[... 12 more matches in file ]
+src/api/routes.ts:15:  // TODO: fix security issue
+```
+
+### 7. Cache Alignment
 
 **What it does:** Structures the prompt so the static system instructions come first, and the dynamic user query comes last. This enables provider-side prefix caching.
 
@@ -223,7 +303,7 @@ focus on bugs, security issues, and performance problems.
 
 **Savings:** 20-40% on repeated queries (provider cache dependent).
 
-### 3. Concise Rewriting
+### 8. Concise Rewriting
 
 **What it does:** Automatically strips verbose phrases from your prompt before sending it to the model.
 
@@ -241,7 +321,7 @@ After:  "Write a function that to sorts a list."
 
 **Note:** Short prompts (<50 chars) are not modified.
 
-### 4. Structured Output
+### 9. Structured Output
 
 **What it does:** Detects what type of task you're asking for and adds specific response format instructions.
 
@@ -257,7 +337,7 @@ After:  "Write a function that to sorts a list."
 | `generate` | "generate", "scaffold", "create" | Clean code, no boilerplate |
 | `review` | "review", "check", "look at" | `{issues: [{file, line, severity, fix}], summary}` |
 
-### 5. Context Tracking
+### 10. Context Tracking
 
 **What it does:** Maintains state across conversation turns:
 - **Compressed file cache:** Files already compressed are reused without re-reading
@@ -273,7 +353,7 @@ Turn 2: @optimize How does the login function work?
         [retrieves Turn 1 context, reads only login function, references previous answer]
 ```
 
-### 6. CCR Pipeline
+### 11. CCR Pipeline
 
 **What it does:** Orchestrates all techniques into a single pipeline (Compress → Cache → Retrieve):
 1. Compress file references
@@ -291,8 +371,12 @@ Turn 2: @optimize How does the login function work?
 ```
 src/
 ├── extension.ts         — Entry point, registers chat participant and commands
-├── pipeline.ts          — Main orchestrator, runs all 6 techniques in sequence
+├── pipeline.ts          — Main orchestrator, runs all techniques in sequence
 ├── compressor.ts        — Code → signature extraction (Python, JS, TS)
+├── content-router.ts    — Detects content type, routes to right compressor
+├── diff-compressor.ts   — Compresses git diff output (caps files/hunks/context)
+├── log-compressor.ts    — Compresses build/test output (keeps errors/stacks)
+├── search-compressor.ts — Compresses grep output (scores + caps matches)
 ├── cache-aligner.ts     — Builds static system prefix + dynamic prompt
 ├── concise-rewriter.ts  — Strips verbose phrases from user prompts
 ├── structured-output.ts — Task detection + response format instructions
