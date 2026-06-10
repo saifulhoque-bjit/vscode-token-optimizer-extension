@@ -2,7 +2,7 @@
   "name": "vscode-copilot-token-optimizer",
   "displayName": "Copilot Token Optimizer",
   "description": "Optimize Copilot token usage with automatic compression, cache alignment, concise rewriting, structured output, and context tracking",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -11,20 +11,87 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tokenOptimizer",
+          "title": "Token Optimizer",
+          "icon": "$(zap)"
+        }
+      ]
+    },
+    "views": {
+      "tokenOptimizer": [
+        {
+          "id": "tokenOptimizer.sidebar",
+          "name": "Controls",
+          "type": "webview"
+        }
+      ]
+    },
     "chatParticipants": [
       {
         "id": "optimize",
         "name": "Optimize",
-        "description": "Optimize token usage",
+        "description": "Optimize token usage (optional — use sidebar for primary control)",
         "isSticky": true
       }
     ],
     "commands": [
       {
+        "command": "tokenOptimizer.toggleAll",
+        "title": "Token Optimizer: Toggle All Optimizations",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "tokenOptimizer.clearContext",
+        "title": "Token Optimizer: Clear Context"
+      },
+      {
         "command": "optimize.clearContext",
         "title": "Clear optimization context"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Token Optimizer",
+      "properties": {
+        "tokenOptimizer.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Master switch — enable/disable all optimizations"
+        },
+        "tokenOptimizer.compression": {
+          "type": "boolean",
+          "default": true,
+          "description": "Extract file signatures instead of full source code"
+        },
+        "tokenOptimizer.contentRouter": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-detect and compress diffs, logs, search results, JSON"
+        },
+        "tokenOptimizer.cacheAlign": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use static prefix for prompt caching efficiency"
+        },
+        "tokenOptimizer.conciseRewrite": {
+          "type": "boolean",
+          "default": true,
+          "description": "Strip verbose phrases and polite filler from prompts"
+        },
+        "tokenOptimizer.structuredOutput": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect task type and add response format instructions"
+        },
+        "tokenOptimizer.contextTracking": {
+          "type": "boolean",
+          "default": true,
+          "description": "Track cross-turn Q&A for follow-up context"
+        }
+      }
+    }
   },
   "categories": [
     "Other"
@@ -32,11 +99,12 @@
   "scripts": {
     "build": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package"
+    "package": "vsce package --allow-missing-repository"
   },
   "dependencies": {},
   "devDependencies": {
     "@types/vscode": "^1.90.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "@vscode/vsce": "^2.0.0"
   }
 }

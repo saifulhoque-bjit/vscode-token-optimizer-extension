@@ -1,10 +1,29 @@
 import * as vscode from 'vscode';
 import { ContextTracker } from './context-tracker';
-import { OptimizationPipeline } from './pipeline';
+import { OptimizationPipeline, PipelineStats } from './pipeline';
+import { getConfig } from './config-manager';
+import { SidebarProvider } from './sidebar-provider';
 
-const tracker = new ContextTracker();
+let tracker = new ContextTracker();
 
 export function activate(context: vscode.ExtensionContext): void {
+    // Create sidebar provider
+    const sidebarProvider = new SidebarProvider(context.extensionUri);
+
+    // Register the sidebar webview view provider
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            SidebarProvider.viewType,
+            sidebarProvider,
+            { webviewOptions: { retainContextWhenHidden: true } }
+        )
+    );
+
+    // Stats callback for pipeline → sidebar
+    const onStats = (stats: PipelineStats) => {
+        sidebarProvider.updateStats(stats.originalLines, stats.compressedLines, stats.fileCount, stats.taskType);
+    };
+
     // Register the @optimize chat participant
     const handler: vscode.ChatRequestHandler = async (
         request: vscode.ChatRequest,
@@ -12,8 +31,9 @@ export function activate(context: vscode.ExtensionContext): void {
         stream: vscode.ChatResponseStream,
         token: vscode.CancellationToken
     ): Promise<vscode.ChatResult> => {
-        const pipeline = new OptimizationPipeline(tracker);
-        await pipeline.process(request, chatContext, stream, token);
+        const config = getConfig();
+        const pipeline = new OptimizationPipeline(tracker, onStats);
+        await pipeline.process(request, chatContext, stream, token, config);
         return {};
     };
 
@@ -21,7 +41,27 @@ export function activate(context: vscode.ExtensionContext): void {
     participant.iconPath = vscode.Uri.joinPath(context.extensionUri, 'icon.png');
     context.subscriptions.push(participant);
 
-    // Register the clear context command
+    // Register toggleAll command
+    context.subscriptions.push(
+        vscode.commands.registerCommand('tokenOptimizer.toggleAll', async () => {
+            const config = getConfig();
+            const { updateConfig } = await import('./config-manager');
+            await updateConfig('enabled', !config.enabled);
+            vscode.window.showInformationMessage(
+                `Token Optimizer ${!config.enabled ? 'enabled' : 'disabled'}.`
+            );
+        })
+    );
+
+    // Register clearContext command
+    context.subscriptions.push(
+        vscode.commands.registerCommand('tokenOptimizer.clearContext', () => {
+            tracker.clear();
+            vscode.window.showInformationMessage('Token Optimizer context cleared.');
+        })
+    );
+
+    // Keep legacy command for backward compatibility
     context.subscriptions.push(
         vscode.commands.registerCommand('optimize.clearContext', () => {
             tracker.clear();
