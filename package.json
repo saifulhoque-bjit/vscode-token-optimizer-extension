@@ -33,7 +33,7 @@
       {
         "id": "optimize",
         "name": "Optimize",
-        "description": "Optimize token usage (optional — use sidebar for primary control)",
+        "description": "Optimize token usage (optional \u2014 use sidebar for primary control)",
         "isSticky": true
       }
     ],
@@ -58,7 +58,7 @@
         "tokenOptimizer.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Master switch — enable/disable all optimizations"
+          "description": "Master switch \u2014 enable/disable all optimizations"
         },
         "tokenOptimizer.compression": {
           "type": "boolean",
@@ -106,5 +106,10 @@
     "@types/vscode": "^1.90.0",
     "typescript": "^5.4.0",
     "@vscode/vsce": "^2.0.0"
+  },
+  "publisher": "saifulhoque-bjit",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/saifulhoque-bjit/vscode-token-optimizer-extension.git"
   }
 }
