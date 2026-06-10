@@ -6,7 +6,6 @@ import { detectTaskType, buildStructuredInstructions } from './structured-output
 import { ContextTracker } from './context-tracker';
 import { compressByType, detectContentType, CompressedOutput } from './content-router';
 import { OptimizationConfig } from './config-manager';
-import { getConfig } from './config-manager';
 
 export interface PipelineStats {
     originalLines: number;
@@ -47,37 +46,22 @@ export class OptimizationPipeline {
         token: vscode.CancellationToken,
         config: OptimizationConfig
     ): Promise<void> {
-        // If master switch is off, pass through directly
-        if (!config.enabled) {
-            const userPrompt = request.prompt;
-            if (!userPrompt) {
-                stream.markdown('Please provide a prompt.');
-                return;
-            }
+        const userPrompt = request.prompt;
+        if (!userPrompt) {
+            stream.markdown('Please provide a prompt.');
+            return;
+        }
 
-            // Select model
-            const model = await this._selectModel();
+        // If master switch is off, pass through directly with tools
+        if (!config.enabled) {
+            const model = await this._selectModel(request);
             if (!model) {
                 stream.markdown('No language model available. Please ensure Copilot is enabled and a model is selected.');
                 return;
             }
 
             const messages = [vscode.LanguageModelChatMessage.User(userPrompt)];
-            try {
-                const response = await model.sendRequest(messages, {}, token);
-                for await (const fragment of response.text) {
-                    stream.markdown(fragment);
-                }
-            } catch (err: unknown) {
-                const message = err instanceof Error ? err.message : String(err);
-                stream.markdown(`\n\nError calling language model: ${message}`);
-            }
-            return;
-        }
-
-        const userPrompt = request.prompt;
-        if (!userPrompt) {
-            stream.markdown('Please provide a prompt.');
+            await this._sendWithToolLoop(model, messages, request, stream, token);
             return;
         }
 
@@ -195,7 +179,7 @@ export class OptimizationPipeline {
         }
 
         // Step 8: Select model and send request
-        const model = await this._selectModel();
+        const model = await this._selectModel(request);
         if (!model) {
             stream.markdown('No language model available. Please ensure Copilot is enabled and a model is selected.');
             return;
@@ -205,17 +189,10 @@ export class OptimizationPipeline {
         const messages = [vscode.LanguageModelChatMessage.User(messageText)];
 
         try {
-            const response = await model.sendRequest(messages, {}, token);
-            let fullAnswer = '';
-
-            // Step 9: Stream response
-            for await (const fragment of response.text) {
-                stream.markdown(fragment);
-                fullAnswer += fragment;
-            }
+            const fullAnswer = await this._sendWithToolLoop(model, messages, request, stream, token);
 
             // Step 10: Track Q&A (only if contextTracking enabled)
-            if (config.contextTracking) {
+            if (config.contextTracking && fullAnswer) {
                 this.tracker.addQA(concisePrompt, fullAnswer);
             }
 
@@ -224,7 +201,6 @@ export class OptimizationPipeline {
                 const savings = totalOriginalLines > 0 ? Math.round((1 - totalCompressedLines / totalOriginalLines) * 100) : 0;
                 let statsLine = `\n\n---\n*📊 Token optimization: ${fileCount} file(s) compressed ${totalOriginalLines} → ${totalCompressedLines} lines (${savings}% reduction). Task type: ${taskType}.*`;
 
-                // Show content-type compression details
                 if (contentCompressions.length > 0) {
                     const typeDetails = contentCompressions
                         .map(c => `${c.type} compression: ${c.original} → ${c.compressed} lines`)
@@ -234,7 +210,6 @@ export class OptimizationPipeline {
 
                 stream.markdown(statsLine);
 
-                // Emit stats to sidebar
                 if (this.onStats) {
                     this.onStats({
                         originalLines: totalOriginalLines,
@@ -261,7 +236,91 @@ export class OptimizationPipeline {
         }
     }
 
-    private async _selectModel(): Promise<vscode.LanguageModelChat | undefined> {
+    /**
+     * Send a request to the model with full tool-call loop support.
+     * Handles multiple rounds of tool calls until the model produces a final text response.
+     * This makes @optimize work in ask, agent, plan, and custom modes.
+     */
+    private async _sendWithToolLoop(
+        model: vscode.LanguageModelChat,
+        messages: vscode.LanguageModelChatMessage[],
+        request: vscode.ChatRequest,
+        stream: vscode.ChatResponseStream,
+        token: vscode.CancellationToken
+    ): Promise<string> {
+        // Get available tools from VS Code
+        const availableTools = vscode.lm.tools.map(t => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.inputSchema
+        }));
+
+        const options: vscode.LanguageModelChatRequestOptions = {
+            tools: availableTools.length > 0 ? availableTools : undefined
+        };
+
+        let fullAnswer = '';
+        let loopCount = 0;
+        const MAX_LOOPS = 15; // safety limit
+
+        while (loopCount < MAX_LOOPS) {
+            loopCount++;
+            const response = await model.sendRequest(messages, options, token);
+
+            const toolCalls: vscode.LanguageModelToolCallPart[] = [];
+            let hasText = false;
+
+            // Process response stream
+            for await (const part of response.stream) {
+                if (part instanceof vscode.LanguageModelTextPart) {
+                    stream.markdown(part.value);
+                    fullAnswer += part.value;
+                    hasText = true;
+                } else if (part instanceof vscode.LanguageModelToolCallPart) {
+                    toolCalls.push(part);
+                }
+            }
+
+            // If no tool calls, we're done
+            if (toolCalls.length === 0) {
+                break;
+            }
+
+            // Execute tool calls and collect results
+            const toolResults: vscode.LanguageModelToolResultPart[] = [];
+            for (const toolCall of toolCalls) {
+                try {
+                    const result = await vscode.lm.invokeTool(
+                        toolCall.name,
+                        { input: toolCall.input, toolInvocationToken: request.toolInvocationToken },
+                        token
+                    );
+                    toolResults.push(new vscode.LanguageModelToolResultPart(toolCall.callId, result.content));
+                } catch (err: unknown) {
+                    const errMsg = err instanceof Error ? err.message : String(err);
+                    toolResults.push(new vscode.LanguageModelToolResultPart(toolCall.callId, [
+                        new vscode.LanguageModelTextPart(`Error executing tool ${toolCall.name}: ${errMsg}`)
+                    ]));
+                }
+            }
+
+            // Add assistant message with tool calls + user message with results for next iteration
+            messages = [
+                ...messages,
+                vscode.LanguageModelChatMessage.Assistant(toolCalls),
+                vscode.LanguageModelChatMessage.User(toolResults)
+            ];
+        }
+
+        return fullAnswer;
+    }
+
+    private async _selectModel(request?: vscode.ChatRequest): Promise<vscode.LanguageModelChat | undefined> {
+        // Use the model from the request if available (respects user's model picker selection)
+        if (request?.model) {
+            return request.model;
+        }
+
         try {
             const models = await vscode.lm.selectChatModels({ family: 'gpt-4o' });
             if (models[0]) { return models[0]; }
