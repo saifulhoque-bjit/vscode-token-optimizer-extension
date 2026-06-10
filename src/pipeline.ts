@@ -4,6 +4,7 @@ import { buildStaticPrefix, buildOptimizedPrompt } from './cache-aligner';
 import { rewriteConcise } from './concise-rewriter';
 import { detectTaskType, buildStructuredInstructions } from './structured-output';
 import { ContextTracker } from './context-tracker';
+import { compressByType, detectContentType, CompressedOutput } from './content-router';
 
 const FILE_LANG_MAP: Record<string, string> = {
     '.py': 'python',
@@ -42,6 +43,7 @@ export class OptimizationPipeline {
         let totalOriginalLines = 0;
         let totalCompressedLines = 0;
         const allSignatures: string[] = [];
+        const contentCompressions: { type: string; original: number; compressed: number }[] = [];
 
         // Step 1: Detect file references
         const fileRefs = this.tracker.detectFileReferences(userPrompt);
@@ -76,6 +78,21 @@ export class OptimizationPipeline {
 
                 allSignatures.push(`\n**${ref}** (${compressed.language}, ${compressed.originalLines} → ${compressed.compressedLines} lines):`);
                 compressed.signatures.forEach(s => allSignatures.push(s));
+
+                // Step 2b: Content-type-aware compression
+                const contentType = detectContentType(content);
+                if (contentType !== 'text' && contentType !== 'code') {
+                    const typeResult = compressByType(content);
+                    if (typeResult.compressedLines < typeResult.originalLines) {
+                        contentCompressions.push({
+                            type: typeResult.type,
+                            original: typeResult.originalLines,
+                            compressed: typeResult.compressedLines
+                        });
+                        allSignatures.push(`\n**[${contentType} compression]** (${typeResult.originalLines} → ${typeResult.compressedLines} lines):`);
+                        allSignatures.push(typeResult.compressed);
+                    }
+                }
             } catch {
                 stream.markdown(`> ⚠️ Could not read file: \`${ref}\`\n\n`);
             }
@@ -83,6 +100,21 @@ export class OptimizationPipeline {
 
         // Step 3: Rewrite concise
         const concisePrompt = rewriteConcise(userPrompt);
+
+        // Step 3b: Detect and compress non-file content in the user prompt
+        const promptContentType = detectContentType(userPrompt);
+        if (promptContentType !== 'text' && promptContentType !== 'code') {
+            const promptResult = compressByType(userPrompt);
+            if (promptResult.compressedLines < promptResult.originalLines) {
+                contentCompressions.push({
+                    type: promptResult.type,
+                    original: promptResult.originalLines,
+                    compressed: promptResult.compressedLines
+                });
+                allSignatures.push(`\n**[pasted ${promptResult.type}]** (${promptResult.originalLines} → ${promptResult.compressedLines} lines):`);
+                allSignatures.push(promptResult.compressed);
+            }
+        }
 
         // Step 4: Build optimized prompt
         const staticPrefix = buildStaticPrefix();
@@ -150,9 +182,19 @@ export class OptimizationPipeline {
             this.tracker.addQA(concisePrompt, fullAnswer);
 
             // Step 11: Report compression stats
-            if (totalOriginalLines > 0) {
-                const savings = Math.round((1 - totalCompressedLines / totalOriginalLines) * 100);
-                stream.markdown(`\n\n---\n*📊 Token optimization: ${fileRefs.length} file(s) compressed ${totalOriginalLines} → ${totalCompressedLines} lines (${savings}% reduction). Task type: ${taskType}.*`);
+            if (totalOriginalLines > 0 || contentCompressions.length > 0) {
+                const savings = totalOriginalLines > 0 ? Math.round((1 - totalCompressedLines / totalOriginalLines) * 100) : 0;
+                let statsLine = `\n\n---\n*📊 Token optimization: ${fileRefs.length} file(s) compressed ${totalOriginalLines} → ${totalCompressedLines} lines (${savings}% reduction). Task type: ${taskType}.*`;
+
+                // Show content-type compression details
+                if (contentCompressions.length > 0) {
+                    const typeDetails = contentCompressions
+                        .map(c => `${c.type} compression: ${c.original} → ${c.compressed} lines`)
+                        .join(', ');
+                    statsLine += `\n*📊 ${typeDetails}*`;
+                }
+
+                stream.markdown(statsLine);
             } else {
                 stream.markdown(`\n\n---\n*📊 Optimized prompt (task: ${taskType}). Concise rewrite: "${concisePrompt}"*`);
             }

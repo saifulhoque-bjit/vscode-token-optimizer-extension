@@ -5,6 +5,23 @@ export interface CompressedFile {
     language: string;
 }
 
+export interface CompressedOutput {
+    compressed: string;
+    originalLines: number;
+    compressedLines: number;
+    type: string;
+}
+
+export function extractSignaturesAsOutput(content: string, language: string): CompressedOutput {
+    const result = extractSignatures(content, language);
+    return {
+        compressed: result.signatures.join('\n'),
+        originalLines: result.originalLines,
+        compressedLines: result.compressedLines,
+        type: 'signatures'
+    };
+}
+
 const PYTHON_SIGNATURE_REGEX = /^(\s*)(def |class |async def )/;
 const JS_TS_SIGNATURE_REGEX = /^(\s*)(export\s+)?(default\s+)?(function |class |const \w+\s*=\s*(?:async\s*)?\(|let \w+\s*=\s*(?:async\s*)?\(|var \w+\s*=\s*(?:async\s*)?\()/;
 
