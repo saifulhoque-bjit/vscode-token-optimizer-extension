@@ -1,0 +1,42 @@
+{
+  "name": "vscode-copilot-token-optimizer",
+  "displayName": "Copilot Token Optimizer",
+  "description": "Optimize Copilot token usage with automatic compression, cache alignment, concise rewriting, structured output, and context tracking",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "optimize",
+        "name": "Optimize",
+        "description": "Optimize token usage",
+        "isSticky": true
+      }
+    ],
+    "commands": [
+      {
+        "command": "optimize.clearContext",
+        "title": "Clear optimization context"
+      }
+    ]
+  },
+  "categories": [
+    "Other"
+  ],
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}
